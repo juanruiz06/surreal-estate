@@ -76,7 +76,7 @@ new class extends Component
 
     public function getPropertiesProperty(): LengthAwarePaginator
     {
-        $allowedSortFields = ['id', 'price', 'size'];
+        $allowedSortFields = ['id', 'price', 'size', 'surreal_score'];
         $sortBy = in_array($this->sortBy, $allowedSortFields, true) ? $this->sortBy : 'price';
         $sortDirection = $this->sortDirection === 'asc' ? 'asc' : 'desc';
 
@@ -614,18 +614,29 @@ Return ONLY a valid JSON object with this exact structure:
         </aside>
 
         <main class="lg:col-span-9">
-            <flux:card class="mb-4 p-4">
-                <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-end">
-                    <flux:select wire:model.live="sortBy" label="Sort by">
-                        <option value="id">Newest</option>
-                        <option value="price">Price</option>
-                        <option value="size">Size</option>
-                    </flux:select>
+            <flux:card class="mb-3 px-4 py-2">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <flux:text class="text-xs text-zinc-600 dark:text-zinc-400">
+                        {{ number_format($this->properties->total(), 0, ',', '.') }} results found
+                    </flux:text>
 
-                    <flux:select wire:model.live="sortDirection" label="Direction">
-                        <option value="desc">Descending</option>
-                        <option value="asc">Ascending</option>
-                    </flux:select>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <flux:text class="text-xs text-zinc-600 dark:text-zinc-400">
+                            Sort by:
+                        </flux:text>
+
+                        <flux:select wire:model.live="sortBy" label="" size="sm">
+                            <option value="id">Newest</option>
+                            <option value="price">Price</option>
+                            <option value="size">Size</option>
+                            <option value="surreal_score">Surreal Score</option>
+                        </flux:select>
+
+                        <flux:select wire:model.live="sortDirection" label="" size="sm">
+                            <option value="desc">Descending</option>
+                            <option value="asc">Ascending</option>
+                        </flux:select>
+                    </div>
                 </div>
             </flux:card>
 
@@ -644,13 +655,13 @@ Return ONLY a valid JSON object with this exact structure:
             @endphp
 
             @if ($hasActiveFilters)
-                <flux:card class="mb-4 p-4">
+                <flux:card class="mb-3 px-3 py-1.5">
                     @php
                         $visibleCharacteristics = collect($selectedCharacteristics)->take(6)->all();
                         $hiddenCharacteristicsCount = max(count($selectedCharacteristics) - count($visibleCharacteristics), 0);
                     @endphp
 
-                    <div class="flex flex-wrap items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-1.5">
                         <flux:badge color="blue" size="sm">Active filters</flux:badge>
 
                         @if ($search !== '')
@@ -715,6 +726,13 @@ Return ONLY a valid JSON object with this exact structure:
                             $galleryImages[] = $galleryImages[0];
                         }
                         $photoCount = max(count($propertyImages), 1);
+                        $surrealScore = is_numeric($property->surreal_score ?? null) ? (float) $property->surreal_score : null;
+                        $scoreBadgeClasses = match (true) {
+                            $surrealScore !== null && $surrealScore >= 8.0 => 'bg-emerald-500 text-white',
+                            $surrealScore !== null && $surrealScore >= 5.0 => 'bg-amber-500 text-zinc-900',
+                            $surrealScore !== null => 'bg-rose-500 text-white',
+                            default => 'bg-zinc-700 text-white',
+                        };
                     @endphp
 
                     <div wire:key="property-item-{{ $this->properties->currentPage() }}-{{ $property->id }}">
@@ -732,6 +750,11 @@ Return ONLY a valid JSON object with this exact structure:
                                             <flux:badge size="sm" color="zinc">
                                                 1/{{ $photoCount }}
                                             </flux:badge>
+                                        </div>
+                                        <div class="absolute left-2 top-2">
+                                            <span class="{{ $scoreBadgeClasses }} inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold shadow-sm">
+                                                Surreal {{ $surrealScore !== null ? number_format($surrealScore, 1) : 'N/A' }}
+                                            </span>
                                         </div>
                                     </div>
 
@@ -835,6 +858,16 @@ Return ONLY a valid JSON object with this exact structure:
                                                 @endforelse
                                             </div>
                                         </div>
+
+                                        @if (is_string($property->surreal_reason ?? null) && trim($property->surreal_reason) !== '')
+                                            <div class="space-y-2 rounded-xl border border-zinc-200 p-3 dark:border-zinc-800">
+                                                <flux:heading size="sm">AI Insights</flux:heading>
+                                                <p class="flex items-start gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                                    <flux:icon name="sparkles" class="mt-0.5 size-4 text-violet-500" />
+                                                    <span>{{ $property->surreal_reason }}</span>
+                                                </p>
+                                            </div>
+                                        @endif
                                     </div>
 
                                     <flux:card class="h-fit p-4" variant="subtle">
