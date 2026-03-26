@@ -1,7 +1,6 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
 use Livewire\Volt\Volt;
 
-// As it is a Volt component, we register it as follows:
+// When the user visits the root, they are redirected to the property list component
 Volt::route('/', 'property-list');

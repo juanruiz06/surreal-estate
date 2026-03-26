@@ -4,14 +4,14 @@ namespace Database\Seeders;
 
 use App\Models\Listing;
 use Illuminate\Database\Seeder;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 
 class ListingsFromJsonSeeder extends Seeder
 {
     public function run(): void
     {
-        $path = base_path('database/seeders/data/listings.json');
+        $path = base_path('database/seeders/data/listings.json'); // Path to the JSON file
 
         if (! File::exists($path)) {
             $this->command?->warn('Listings JSON file not found at database/seeders/data/listings.json');
@@ -20,7 +20,7 @@ class ListingsFromJsonSeeder extends Seeder
         }
 
         $decoded = json_decode((string) File::get($path), true);
-        $rows = is_array($decoded['listings'] ?? null) ? $decoded['listings'] : [];
+        $rows = is_array($decoded['listings'] ?? null) ? $decoded['listings'] : []; // Gets the listings from the JSON file
 
         if (count($rows) === 0) {
             $this->command?->warn('No listings found in JSON payload.');
@@ -40,17 +40,16 @@ class ListingsFromJsonSeeder extends Seeder
                     ? trim($row['external_id'])
                     : ($url !== null && $url !== '' ? md5($url) : null);
 
-                return [
+                return [ // Returns the listing data
                     'external_id' => $externalId,
                     'url' => $url,
                     'title' => isset($row['title']) && is_string($row['title']) ? trim($row['title']) : null,
                     'description' => isset($row['description']) && is_string($row['description']) ? trim($row['description']) : null,
 
-                    // IMPORTANT: upsert payload must contain JSON strings for json columns
+                    // Forces valid JSON encoding of images and characteristics
                     'images' => json_encode($images, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
                     'characteristics' => json_encode($characteristics, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '[]',
 
-                    // Numeric casting
                     'price' => is_numeric($row['price'] ?? null) ? (int) $row['price'] : null,
                     'size' => is_numeric($row['size'] ?? null) ? (int) $row['size'] : null,
                     'rooms' => is_numeric($row['rooms'] ?? null) ? (int) $row['rooms'] : null,
@@ -70,7 +69,7 @@ class ListingsFromJsonSeeder extends Seeder
                         : now()->toDateTimeString(),
                 ];
             })
-            ->filter(fn (array $row) => is_string($row['external_id']) && $row['external_id'] !== '')
+            ->filter(fn (array $row) => is_string($row['external_id']) && $row['external_id'] !== '') // Filters out listings with no external ID
             ->values()
             ->all();
 
@@ -80,12 +79,12 @@ class ListingsFromJsonSeeder extends Seeder
             return;
         }
 
-        $chunks = array_chunk($listings, 50);
+        $chunks = array_chunk($listings, 50); // to avoid memory issues and easy management, we chunk the listings into 50 listings at a time
         $imported = 0;
 
         foreach ($chunks as $index => $chunk) {
             try {
-                Listing::query()->upsert(
+                Listing::query()->upsert( // Upserts the listings into the database (if it exists updates if not, inserts)
                     $chunk,
                     ['external_id'],
                     [

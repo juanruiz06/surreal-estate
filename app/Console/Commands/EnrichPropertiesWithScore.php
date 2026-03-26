@@ -16,7 +16,7 @@ class EnrichPropertiesWithScore extends Command
     {
         $total = Listing::query()->whereNull('surreal_score')->count();
 
-        if ($total === 0) {
+        if ($total === 0) { // If no listings need scoring, return success
             $this->info('No listings need scoring.');
 
             return self::SUCCESS;
@@ -29,12 +29,12 @@ class EnrichPropertiesWithScore extends Command
         Listing::query()
             ->whereNull('surreal_score')
             ->orderBy('id')
-            ->chunkById(50, function ($listings) use (&$processed, $total): void {
+            ->chunkById(50, function ($listings) use (&$processed, $total): void { // Chunk the listings into 50 listings at a time for easy management
                 foreach ($listings as $listing) {
                     $processed++;
 
                     try {
-                        $payload = json_encode([
+                        $payload = json_encode([ // Structured input for AI
                             'price' => $listing->price,
                             'size' => $listing->size,
                             'neighborhood' => $listing->neighborhood,
@@ -47,9 +47,9 @@ class EnrichPropertiesWithScore extends Command
                             'model' => 'gpt-4o-mini',
                             'response_format' => ['type' => 'json_object'],
                             'messages' => [
-                                [
+                                [ // Made the prompt give variance in the scores and be bold because it tended to be bland and boring
                                     'role' => 'system',
-                                    'content' => 'You are a cynical, high-end Madrid Real Estate Critic. Your scores must have high variance. Do NOT give everyone a 6 or 7.
+                                    'content' => 'You are a cynical, high-end Madrid Real Estate Critic. Your scores must have high variance. Do NOT give everyone a 6 or 7. 
 
 The Scale:
 9.0 - 10 (Surreal): Only for absolute unicorns. A mansion in Salamanca at a 3-bedroom price. High-quality photos + amazing price/m2 ratio.
@@ -78,11 +78,11 @@ Return ONLY a valid JSON object with:
                         $rawScore = $json['score'] ?? null;
                         $reason = is_string($json['reason'] ?? null) ? trim($json['reason']) : null;
 
-                        if (! is_numeric($rawScore) || $reason === null || $reason === '') {
+                        if (! is_numeric($rawScore) || $reason === null || $reason === '') { // If the score is not numeric or the reason is null or empty, throw an error
                             throw new \RuntimeException('Invalid AI score payload.');
                         }
 
-                        $score = round(max(1.0, min(10.0, (float) $rawScore)), 2);
+                        $score = round(max(1.0, min(10.0, (float) $rawScore)), 2); // Rounds the score to 2 decimal places and ensures it's between 1.0 and 10.0
 
                         $listing->surreal_score = $score;
                         $listing->surreal_reason = $reason;

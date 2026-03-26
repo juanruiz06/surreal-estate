@@ -11,7 +11,7 @@ use Symfony\Component\DomCrawler\Crawler;
 
 class ImportPropertiesCommand extends Command
 {
-    // Este es el nombre del comando que escribiremos en la terminal
+    // We will write this command in the terminal
     protected $signature = 'app:import-properties';
 
     protected $description = 'Extracts properties from pisos.com and uses AI to normalize the data';
@@ -21,7 +21,7 @@ class ImportPropertiesCommand extends Command
         $totalPages = 10;
         $placeholderImage = 'https://placehold.co/1200x800?text=No+Image';
 
-        $extractText = static function (Crawler $scope, string $selector): ?string {
+        $extractText = static function (Crawler $scope, string $selector): ?string { // Gets clean text from the selector or returns null
             if ($scope->filter($selector)->count() === 0) {
                 return null;
             }
@@ -31,7 +31,7 @@ class ImportPropertiesCommand extends Command
             return $value !== '' ? $value : null;
         };
 
-        $canonicalizeUrl = static function (string $url): string {
+        $canonicalizeUrl = static function (string $url): string { // Removes query parameters from the url, trims slashes, forces lowercase in host
             $parts = parse_url($url);
 
             if ($parts === false) {
@@ -45,7 +45,7 @@ class ImportPropertiesCommand extends Command
             return rtrim("{$scheme}://{$host}{$path}", '/');
         };
 
-        $toAbsoluteAssetUrl = static function (?string $url): ?string {
+        $toAbsoluteAssetUrl = static function (?string $url): ?string { // Cleans image urls to be absolute and valid
             if (! is_string($url) || trim($url) === '') {
                 return null;
             }
@@ -84,7 +84,7 @@ class ImportPropertiesCommand extends Command
             $url = "https://www.pisos.com/venta/pisos-madrid/{$page}/";
             $response = Http::withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-            ])->get($url);
+            ])->get($url); // Gets the page content
 
             if (! $response->successful()) {
                 $this->warn('Skipping page '.$page.'. HTTP code: '.$response->status());
@@ -92,8 +92,8 @@ class ImportPropertiesCommand extends Command
                 continue;
             }
 
-            $crawler = new Crawler($response->body());
-            $ads = $crawler->filter('div.ad-preview')->slice(0, 30);
+            $crawler = new Crawler($response->body()); // Creates a crawler from the page content
+            $ads = $crawler->filter('div.ad-preview')->slice(0, 30); // Gets the ads from the page
 
             if ($ads->count() === 0) {
                 $this->warn('No ads found on page '.$page.'. Stopping pagination.');
@@ -108,7 +108,7 @@ class ImportPropertiesCommand extends Command
                 $infoText = $infoNode->count() > 0
                     ? $infoNode->first()->text('')
                     : $node->text('');
-                $rawText = Str::of($infoText)->squish()->toString();
+                $rawText = Str::of($infoText)->squish()->toString(); // Cleans the text from the info node
 
                 $title = $extractText($node, 'a.ad-preview__title');
                 $price = $extractText($node, 'span.ad-preview__price');
@@ -116,7 +116,7 @@ class ImportPropertiesCommand extends Command
                 $features = $extractText($node, 'p.ad-preview__char');
                 $description = $extractText($node, 'p.ad-preview__description');
 
-                $imageSelectors = [
+                $imageSelectors = [ // gets pictures
                     '.carousel__container .carousel__main-photo-mosaic img',
                     '.carousel__container .carousel__secondary-photo-as-img img',
                     '.carousel__container .carousel__mosaic-item img',
@@ -268,6 +268,7 @@ class ImportPropertiesCommand extends Command
 
                 $images = array_slice($images, 0, 2);
 
+                // All of the above is to get the images from the ad
                 $relativeUrl = $node->filter('a.ad-preview__title')->count() > 0
                     ? $node->filter('a.ad-preview__title')->first()->attr('href')
                     : null;
@@ -283,14 +284,14 @@ class ImportPropertiesCommand extends Command
                 $progressPrefix = '[Page '.$page.'/'.$totalPages.'] Ad '.($i + 1).'/'.$adsCount.': '.$displayTitle.' - '.$displayPrice;
                 $this->line($progressPrefix);
 
-                if (Listing::query()->where('external_id', $externalId)->exists()) {
+                if (Listing::query()->where('external_id', $externalId)->exists()) { // Deduplication (We use URL because it's unique and more stable than the external ID)
                     $this->line('   Skipped (already imported): '.$canonicalListingUrl);
 
                     return;
                 }
 
                 try {
-                    $structuredInput = json_encode([
+                    $structuredInput = json_encode([ // Structured input for AI
                         'title' => $title,
                         'price' => $price,
                         'subtitle' => $neighborhood,
@@ -298,7 +299,7 @@ class ImportPropertiesCommand extends Command
                         'description' => $description,
                     ], JSON_UNESCAPED_UNICODE);
 
-                    sleep(1);
+                    sleep(1); // Wait for 1 second to avoid rate limiting
 
                     $aiResponse = OpenAI::chat()->create([
                         'model' => 'gpt-4o-mini',
@@ -341,6 +342,8 @@ class ImportPropertiesCommand extends Command
                             ],
                         ],
                     ]);
+
+                    // This above is the response given the prompt, we normalize with AI because it's more flexible than regex and can handle free form text well
 
                     $content = $aiResponse->choices[0]->message->content ?? '';
                     $jsonData = json_decode($content, true);
