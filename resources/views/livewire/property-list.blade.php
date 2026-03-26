@@ -703,10 +703,17 @@ Return ONLY a valid JSON object with this exact structure:
                         $modalName = 'detail-modal-' . $this->properties->currentPage() . '-' . $property->id;
                         $propertyImages = collect($property->images ?? [])
                             ->filter(fn ($image) => is_string($image) && trim($image) !== '')
+                            ->unique()
                             ->values()
                             ->all();
                         $mainImage = $propertyImages[0] ?? 'https://placehold.co/1200x800?text=No+Image';
-                        $thumbnailImages = array_slice($propertyImages, 1, 4);
+                        $galleryImages = array_slice($propertyImages, 0, 2);
+                        if (count($galleryImages) === 0) {
+                            $galleryImages[] = 'https://placehold.co/1200x800?text=No+Image';
+                        }
+                        while (count($galleryImages) < 2) {
+                            $galleryImages[] = $galleryImages[0];
+                        }
                         $photoCount = max(count($propertyImages), 1);
                     @endphp
 
@@ -772,22 +779,31 @@ Return ONLY a valid JSON object with this exact structure:
 
                         <flux:modal name="{{ $modalName }}" variant="flyout" class="md:max-w-3xl">
                             <div class="space-y-6 p-1">
-                                <div class="space-y-3">
-                                    <img
-                                        src="{{ $mainImage }}"
-                                        alt="{{ $property->title ?? 'Main property image' }}"
-                                        class="h-56 w-full rounded-xl object-cover shadow-sm md:h-72"
-                                        loading="lazy"
-                                    />
+                                <div x-data="{ activePhoto: 0, photos: @js($galleryImages) }" class="space-y-3">
+                                    <div class="aspect-video overflow-hidden rounded-xl shadow-sm">
+                                        <img
+                                            :src="photos[activePhoto]"
+                                            alt="{{ $property->title ?? 'Main property image' }}"
+                                            class="h-full w-full object-cover"
+                                            loading="lazy"
+                                        />
+                                    </div>
 
-                                    <div class="grid grid-cols-4 gap-2">
-                                        @foreach ($thumbnailImages as $thumbnail)
-                                            <img
-                                                src="{{ $thumbnail }}"
-                                                alt="Property thumbnail"
-                                                class="h-20 w-full rounded-lg object-cover shadow-sm"
-                                                loading="lazy"
-                                            />
+                                    <div class="grid grid-cols-2 gap-2">
+                                        @foreach ($galleryImages as $index => $thumbnail)
+                                            <button
+                                                type="button"
+                                                @click="activePhoto = {{ $index }}"
+                                                class="overflow-hidden rounded-lg border border-transparent shadow-sm transition"
+                                                :class="activePhoto === {{ $index }} ? 'border-blue-500 opacity-100' : 'opacity-70 hover:opacity-100'"
+                                            >
+                                                <img
+                                                    src="{{ $thumbnail }}"
+                                                    alt="Property thumbnail {{ $index + 1 }}"
+                                                    class="h-20 w-full object-cover"
+                                                    loading="lazy"
+                                                />
+                                            </button>
                                         @endforeach
                                     </div>
                                 </div>

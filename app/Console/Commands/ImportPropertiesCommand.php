@@ -2,18 +2,18 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Listing;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
-use Symfony\Component\DomCrawler\Crawler;
-use OpenAI\Laravel\Facades\OpenAI;
-use App\Models\Listing;
 use Illuminate\Support\Str;
+use OpenAI\Laravel\Facades\OpenAI;
+use Symfony\Component\DomCrawler\Crawler;
 
 class ImportPropertiesCommand extends Command
 {
     // Este es el nombre del comando que escribiremos en la terminal
     protected $signature = 'app:import-properties';
-    
+
     protected $description = 'Extracts properties from pisos.com and uses AI to normalize the data';
 
     public function handle()
@@ -40,42 +40,55 @@ class ImportPropertiesCommand extends Command
 
             $scheme = $parts['scheme'] ?? 'https';
             $host = strtolower($parts['host'] ?? 'www.pisos.com');
-            $path = '/' . ltrim($parts['path'] ?? '/', '/');
+            $path = '/'.ltrim($parts['path'] ?? '/', '/');
 
             return rtrim("{$scheme}://{$host}{$path}", '/');
         };
 
         $toAbsoluteAssetUrl = static function (?string $url): ?string {
-            if (!is_string($url) || trim($url) === '') {
+            if (! is_string($url) || trim($url) === '') {
                 return null;
             }
 
-            $normalized = trim($url);
+            $normalized = html_entity_decode(trim($url), ENT_QUOTES | ENT_HTML5);
+            $normalized = str_replace('\\/', '/', $normalized);
+            $normalized = preg_replace('/\s+/', '', $normalized) ?? $normalized;
+            $normalized = trim($normalized, "\"'");
+
             if (str_starts_with($normalized, 'data:')) {
                 return null;
             }
 
             if (Str::startsWith($normalized, '//')) {
-                return 'https:' . $normalized;
+                return 'https:'.$normalized;
             }
 
             if (Str::startsWith($normalized, '/')) {
-                return 'https://www.pisos.com' . $normalized;
+                return 'https://www.pisos.com'.$normalized;
             }
 
             return $normalized;
         };
 
+        $isLogoLike = static function (?string $value): bool {
+            if (! is_string($value) || trim($value) === '') {
+                return false;
+            }
+
+            return str_contains(Str::lower($value), 'logo');
+        };
+
         for ($page = 1; $page <= $totalPages; $page++) {
-            $this->info('--- Processing Page ' . $page . '/' . $totalPages . ' ---');
+            $this->info('--- Processing Page '.$page.'/'.$totalPages.' ---');
 
             $url = "https://www.pisos.com/venta/pisos-madrid/{$page}/";
             $response = Http::withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
             ])->get($url);
 
-            if (!$response->successful()) {
-                $this->warn('Skipping page ' . $page . '. HTTP code: ' . $response->status());
+            if (! $response->successful()) {
+                $this->warn('Skipping page '.$page.'. HTTP code: '.$response->status());
+
                 continue;
             }
 
@@ -83,14 +96,14 @@ class ImportPropertiesCommand extends Command
             $ads = $crawler->filter('div.ad-preview')->slice(0, 30);
 
             if ($ads->count() === 0) {
-                $this->warn('No ads found on page ' . $page . '. Stopping pagination.');
+                $this->warn('No ads found on page '.$page.'. Stopping pagination.');
                 break;
             }
 
-            $this->info('Processing ' . $ads->count() . ' ads with OpenAI (gpt-4o-mini)...');
+            $this->info('Processing '.$ads->count().' ads with OpenAI (gpt-4o-mini)...');
             $adsCount = $ads->count();
 
-            $ads->each(function (Crawler $node, $i) use ($adsCount, $canonicalizeUrl, $extractText, $page, $placeholderImage, $toAbsoluteAssetUrl, $totalPages) {
+            $ads->each(function (Crawler $node, $i) use ($adsCount, $canonicalizeUrl, $extractText, $isLogoLike, $page, $placeholderImage, $toAbsoluteAssetUrl, $totalPages) {
                 $infoNode = $node->filter('div.ad-preview__info');
                 $infoText = $infoNode->count() > 0
                     ? $infoNode->first()->text('')
@@ -104,26 +117,46 @@ class ImportPropertiesCommand extends Command
                 $description = $extractText($node, 'p.ad-preview__description');
 
                 $imageSelectors = [
-                    '.carousel__main-photo-mosaic img',
-                    '.carousel__secondary-photo-as-img img',
-                    '.carousel__mosaic-item img',
+                    '.carousel__container .carousel__main-photo-mosaic img',
+                    '.carousel__container .carousel__secondary-photo-as-img img',
+                    '.carousel__container .carousel__mosaic-item img',
+                    '.carousel__container .carousel__slide img',
+                    '.carousel__container picture img',
+                    '.carousel__container picture source',
+                    '.carousel__container img',
                 ];
 
                 $images = collect($imageSelectors)
-                    ->flatMap(function (string $selector) use ($node, $toAbsoluteAssetUrl) {
+                    ->flatMap(function (string $selector) use ($isLogoLike, $node, $toAbsoluteAssetUrl) {
                         if ($node->filter($selector)->count() === 0) {
                             return [];
                         }
 
-                        return collect($node->filter($selector)->each(function (Crawler $imgNode) use ($toAbsoluteAssetUrl) {
-                            $candidate = $imgNode->attr('src')
-                                ?? $imgNode->attr('data-src')
-                                ?? $imgNode->attr('data-original')
+                        return collect($node->filter($selector)->each(function (Crawler $imgNode) use ($isLogoLike, $toAbsoluteAssetUrl) {
+                            $class = (string) ($imgNode->attr('class') ?? '');
+                            $id = (string) ($imgNode->attr('id') ?? '');
+                            $alt = (string) ($imgNode->attr('alt') ?? '');
+
+                            if ($isLogoLike($class) || $isLogoLike($id) || $isLogoLike($alt)) {
+                                return null;
+                            }
+
+                            $candidate = $imgNode->attr('data-src')
+                                ?? $imgNode->attr('data-lazy')
+                                ?? $imgNode->attr('data-lazy-src')
                                 ?? '';
 
                             if (($candidate === '' || str_starts_with($candidate, 'data:')) && is_string($imgNode->attr('srcset'))) {
                                 $srcSetFirst = trim(explode(',', $imgNode->attr('srcset'))[0] ?? '');
                                 $candidate = trim(explode(' ', $srcSetFirst)[0] ?? '');
+                            }
+
+                            if ($candidate === '' || str_starts_with($candidate, 'data:')) {
+                                $candidate = $imgNode->attr('src') ?? '';
+                            }
+
+                            if ($isLogoLike($candidate)) {
+                                return null;
                             }
 
                             return $toAbsoluteAssetUrl($candidate);
@@ -136,21 +169,110 @@ class ImportPropertiesCommand extends Command
                     ->values()
                     ->all();
 
+                $dataPhotosImages = collect($node->filter('[data-photos]')->each(fn (Crawler $dataNode) => $dataNode->attr('data-photos')))
+                    ->filter(fn ($payload) => is_string($payload) && trim($payload) !== '')
+                    ->flatMap(function (string $payload) use ($isLogoLike, $toAbsoluteAssetUrl) {
+                        $decoded = html_entity_decode($payload, ENT_QUOTES | ENT_HTML5);
+                        $decoded = str_replace('\\/', '/', $decoded);
+                        $results = [];
+
+                        $json = json_decode($decoded, true);
+                        if (is_array($json)) {
+                            array_walk_recursive($json, function ($value) use (&$results): void {
+                                if (is_string($value)) {
+                                    $results[] = $value;
+                                }
+                            });
+                        }
+
+                        preg_match_all('/(?:https?:)?\/\/[^\s"\'<>]+?\.(?:jpg|jpeg|png|webp|gif)(?:\?[^\s"\'<>]*)?/i', $decoded, $matches);
+                        preg_match_all('/https:\/\/fotos\.itnm\.es\/[^\s"\'<>]+?\.jpg(?:\?[^\s"\'<>]*)?/i', $decoded, $itnmMatches);
+                        $results = array_merge($results, $matches[0] ?? [], $itnmMatches[0] ?? []);
+
+                        return collect($results)
+                            ->map(fn ($url) => $toAbsoluteAssetUrl($url))
+                            ->filter(fn ($url) => is_string($url) && ! $isLogoLike($url))
+                            ->filter(fn ($url) => is_string($url) && trim($url) !== '')
+                            ->values()
+                            ->all();
+                    })
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                $scriptImages = collect($node->filter('script')->each(fn (Crawler $scriptNode) => $scriptNode->text('')))
+                    ->flatMap(function (string $scriptContent) use ($isLogoLike, $toAbsoluteAssetUrl) {
+                        $normalizedScript = str_replace('\\/', '/', $scriptContent);
+                        $results = [];
+
+                        preg_match_all('/(?:https?:)?\/\/[^\s"\'<>]+?\.(?:jpg|jpeg|png|webp|gif)(?:\?[^\s"\'<>]*)?/i', $normalizedScript, $allImageMatches);
+                        preg_match_all('/https:\/\/fotos\.itnm\.es\/[^\s"\'<>]+?\.jpg(?:\?[^\s"\'<>]*)?/i', $normalizedScript, $itnmMatches);
+                        $results = array_merge($results, $allImageMatches[0] ?? [], $itnmMatches[0] ?? []);
+
+                        return collect($results)
+                            ->map(fn ($url) => $toAbsoluteAssetUrl($url))
+                            ->filter(fn ($url) => is_string($url) && ! $isLogoLike($url))
+                            ->filter(fn ($url) => is_string($url) && trim($url) !== '')
+                            ->values()
+                            ->all();
+                    })
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                $containerHtmlImageCandidates = (function () use ($node): array {
+                    try {
+                        $containerHtml = $node->html('');
+                    } catch (\Throwable) {
+                        return [];
+                    }
+
+                    if (! is_string($containerHtml) || trim($containerHtml) === '') {
+                        return [];
+                    }
+
+                    $normalizedHtml = html_entity_decode($containerHtml, ENT_QUOTES | ENT_HTML5);
+                    $normalizedHtml = str_replace('\\/', '/', $normalizedHtml);
+                    $results = [];
+
+                    preg_match_all('/https:\/\/fotos\.itnm\.es\/[^\s"\'<>]+?\.jpg(?:\?[^\s"\'<>]*)?/i', $normalizedHtml, $itnmMatches);
+                    preg_match_all('/(?:https?:)?\/\/[^\s"\'<>]+?\.(?:jpg|jpeg|png|webp|gif)(?:\?[^\s"\'<>]*)?/i', $normalizedHtml, $allImageMatches);
+                    $results = array_merge($results, $itnmMatches[0] ?? [], $allImageMatches[0] ?? []);
+
+                    return $results;
+                })();
+
+                $containerHtmlImages = collect($containerHtmlImageCandidates)
+                    ->map(fn ($url) => $toAbsoluteAssetUrl($url))
+                    ->filter(fn ($url) => is_string($url) && ! $isLogoLike($url))
+                    ->filter(fn ($url) => is_string($url) && trim($url) !== '')
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                $images = collect(array_merge($images, $dataPhotosImages, $scriptImages, $containerHtmlImages))
+                    ->filter(fn ($url) => is_string($url) && ! $isLogoLike($url))
+                    ->filter(fn ($url) => is_string($url) && trim($url) !== '')
+                    ->map(fn (string $url) => trim($url))
+                    ->unique()
+                    ->values()
+                    ->all();
+
+                if (count($images) > 0) {
+                    $this->info('Found real image: '.($images[0] ?? 'N/A'));
+                }
+
                 if (count($images) === 0) {
                     $images[] = $placeholderImage;
                 }
 
-                while (count($images) < 5) {
-                    $images[] = $images[0] ?? $placeholderImage;
-                }
-
-                $images = array_slice($images, 0, 5);
+                $images = array_slice($images, 0, 2);
 
                 $relativeUrl = $node->filter('a.ad-preview__title')->count() > 0
                     ? $node->filter('a.ad-preview__title')->first()->attr('href')
                     : null;
                 $listingUrl = is_string($relativeUrl) && $relativeUrl !== ''
-                    ? (Str::startsWith($relativeUrl, 'http') ? $relativeUrl : 'https://www.pisos.com' . $relativeUrl)
+                    ? (Str::startsWith($relativeUrl, 'http') ? $relativeUrl : 'https://www.pisos.com'.$relativeUrl)
                     : 'https://www.pisos.com/venta/pisos-madrid/';
 
                 $canonicalListingUrl = $canonicalizeUrl($listingUrl);
@@ -158,11 +280,12 @@ class ImportPropertiesCommand extends Command
 
                 $displayTitle = $title ?: 'Untitled';
                 $displayPrice = $price ?: 'N/A';
-                $progressPrefix = '[Page ' . $page . '/' . $totalPages . '] Ad ' . ($i + 1) . '/' . $adsCount . ': ' . $displayTitle . ' - ' . $displayPrice;
+                $progressPrefix = '[Page '.$page.'/'.$totalPages.'] Ad '.($i + 1).'/'.$adsCount.': '.$displayTitle.' - '.$displayPrice;
                 $this->line($progressPrefix);
 
                 if (Listing::query()->where('external_id', $externalId)->exists()) {
-                    $this->line('   Skipped (already imported): ' . $canonicalListingUrl);
+                    $this->line('   Skipped (already imported): '.$canonicalListingUrl);
+
                     return;
                 }
 
@@ -222,7 +345,7 @@ class ImportPropertiesCommand extends Command
                     $content = $aiResponse->choices[0]->message->content ?? '';
                     $jsonData = json_decode($content, true);
 
-                    if (!is_array($jsonData)) {
+                    if (! is_array($jsonData)) {
                         throw new \RuntimeException('Model did not return a valid JSON object.');
                     }
 
@@ -248,9 +371,9 @@ class ImportPropertiesCommand extends Command
                     $matchAttributes = ['external_id' => $externalId];
                     Listing::updateOrCreate($matchAttributes, $listingData);
 
-                    $this->info("   Saved: " . ($listingData['title'] ?? 'Untitled') . ' - ' . ($listingData['price'] ?? 'N/A') . "€!");
+                    $this->info('   Saved: '.($listingData['title'] ?? 'Untitled').' - '.($listingData['price'] ?? 'N/A').'€!');
                 } catch (\Exception $e) {
-                    $this->error('   Error with the AI: ' . $e->getMessage());
+                    $this->error('   Error with the AI: '.$e->getMessage());
                 }
             });
         }
