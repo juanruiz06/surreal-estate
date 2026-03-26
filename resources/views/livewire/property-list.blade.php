@@ -3,6 +3,8 @@
 use App\Models\Listing;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Livewire\Attributes\Url;
 use Livewire\Volt\Component;
 use Livewire\WithPagination;
@@ -54,6 +56,23 @@ new class extends Component
     public int $aiPreviewCount = 0;
     public string $aiWarning = '';
     public bool $isAnalyzing = false;
+
+    public int $lifestyleStep = 1;
+    public string $lifestyleWorkLocation = '';
+    public string $lifestyleWorkFrequency = '';
+    public string $lifestyleHousehold = 'Alone';
+    public bool $lifestyleHasPets = false;
+    public string $lifestyleIncome = '';
+    public string $lifestyleSavings = '';
+    public string $lifestyleHobbies = '';
+    public string $lifestyleSocial = '';
+    public string $lifestylePriority = '';
+    public string $lifestyleNotes = '';
+    public bool $isLifestyleAnalyzing = false;
+    public bool $lifestyleReady = false;
+    public string $lifestyleAnalysis = '';
+    public array $lifestyleDetectedFilters = [];
+    public string $lifestyleWarning = '';
 
     public function rendering($view): void
     {
@@ -367,6 +386,347 @@ Return ONLY a valid JSON object with this exact structure:
         $this->resetPage();
     }
 
+    public function resetLifestyleAdvisor(): void
+    {
+        $this->lifestyleStep = 1;
+        $this->lifestyleReady = false;
+        $this->isLifestyleAnalyzing = false;
+        $this->lifestyleAnalysis = '';
+        $this->lifestyleDetectedFilters = [];
+        $this->lifestyleWarning = '';
+    }
+
+    public function nextLifestyleStep(): void
+    {
+        if ($this->lifestyleStep < 6) {
+            $this->lifestyleStep++;
+        }
+    }
+
+    public function previousLifestyleStep(): void
+    {
+        if ($this->lifestyleStep > 1) {
+            $this->lifestyleStep--;
+        }
+    }
+
+    public function recommendLifestyle(): void
+    {
+        $this->isLifestyleAnalyzing = true;
+        $this->lifestyleReady = false;
+        $this->lifestyleWarning = '';
+
+        try {
+            $realNeighborhoods = Listing::query()
+                ->whereNotNull('neighborhood')
+                ->distinct()
+                ->pluck('neighborhood')
+                ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+                ->map(fn (string $value) => trim($value))
+                ->values()
+                ->all();
+            $realNeighborhoodsList = collect($realNeighborhoods)->implode(', ');
+
+            $realCharacteristics = collect($this->allCharacteristics)
+                ->map(fn ($value) => is_string($value) ? Str::lower(trim($value)) : null)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            $payload = json_encode([
+                'work' => [
+                    'location' => $this->lifestyleWorkLocation,
+                    'frequency' => $this->lifestyleWorkFrequency,
+                ],
+                'family' => [
+                    'household' => $this->lifestyleHousehold,
+                    'hasPets' => $this->lifestyleHasPets,
+                ],
+                'financials' => [
+                    'monthlyNetIncome' => is_numeric($this->lifestyleIncome) ? (float) $this->lifestyleIncome : null,
+                    'depositSavings' => is_numeric($this->lifestyleSavings) ? (float) $this->lifestyleSavings : null,
+                ],
+                'hobbies' => $this->lifestyleHobbies,
+                'social' => $this->lifestyleSocial,
+                'priority' => $this->lifestylePriority,
+                'notes' => $this->lifestyleNotes,
+            ], JSON_UNESCAPED_UNICODE);
+
+            $response = OpenAI::chat()->create([
+                'model' => 'gpt-4o-mini',
+                'response_format' => ['type' => 'json_object'],
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are a Senior Real Estate Investment Consultant in Madrid.
+Analyze the user data:
+- Affordability: STRICTLY enforce the 30% entry rule (20% downpayment + 10% taxes/fees) and max 33% debt ratio from monthly net income.
+- If savings are too low for the requested profile or target areas, you MUST say this clearly in the analysis and suggest more affordable up-and-coming neighborhoods from REAL_NEIGHBORHOODS.
+- Commute: Optimize location between Work, Hobbies, and Family landmarks.
+- Matching: Map the intent to the available neighborhoods in my DB.
+- Neighborhood output constraint: You MUST ONLY return neighborhood names from this exact list and keep original spelling: ' . $realNeighborhoodsList . '. Do not invent neighborhoods. Do not include nearby areas unless they appear in the exact list.
+
+REAL_NEIGHBORHOODS: ' . json_encode($realNeighborhoods, JSON_UNESCAPED_UNICODE) . '
+REAL_CHARACTERISTICS: ' . json_encode($realCharacteristics, JSON_UNESCAPED_UNICODE) . '
+
+Return ONLY valid JSON:
+{
+  "filters": {
+    "neighborhoods": string[]|null,
+    "maxPrice": number|null,
+    "minRooms": number|null,
+    "minSize": number|null,
+    "type": string|null,
+    "characteristics": string[]|null,
+    "searchKeyword": string|null
+  },
+  "analysis": "A professional 2-paragraph recommendation explaining the chosen areas based on commute and budget."
+}',
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $payload,
+                    ],
+                ],
+            ]);
+
+            $json = json_decode($response->choices[0]->message->content ?? '', true);
+            if (! is_array($json)) {
+                return;
+            }
+
+            $filters = is_array($json['filters'] ?? null) ? $json['filters'] : [];
+
+            $this->lifestyleDetectedFilters = $this->normalizeLifestyleFilters($filters, $realNeighborhoods, $realCharacteristics);
+
+            $this->lifestyleAnalysis = is_string($json['analysis'] ?? null)
+                ? trim($json['analysis'])
+                : 'I prepared a lifestyle-based recommendation for your situation.';
+            $this->lifestyleReady = true;
+        } catch (\Throwable) {
+            $this->lifestyleAnalysis = 'I could not generate a recommendation right now. Please try again.';
+            $this->lifestyleDetectedFilters = [];
+            $this->lifestyleReady = true;
+        } finally {
+            $this->isLifestyleAnalyzing = false;
+        }
+    }
+
+    public function applyLifestyleRecommendation(): void
+    {
+        if (! $this->lifestyleReady || count($this->lifestyleDetectedFilters) === 0) {
+            return;
+        }
+
+        $this->lifestyleWarning = '';
+
+        $realNeighborhoods = Listing::query()
+            ->whereNotNull('neighborhood')
+            ->distinct()
+            ->pluck('neighborhood')
+            ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+            ->map(fn (string $value) => trim($value))
+            ->values()
+            ->all();
+
+        $realCharacteristics = collect($this->allCharacteristics)
+            ->map(fn ($value) => is_string($value) ? Str::lower(trim($value)) : null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $candidateFilters = $this->normalizeLifestyleFilters($this->lifestyleDetectedFilters, $realNeighborhoods, $realCharacteristics);
+        $previewCount = $this->getLifestylePreviewCount($candidateFilters);
+        $hasBudgetConstraint = is_numeric($candidateFilters['maxPrice'] ?? null);
+
+        if ($previewCount === 0 && $hasBudgetConstraint) {
+            $fallbackFilters = $this->requestLifestyleFallbackFilters(
+                $candidateFilters,
+                $realNeighborhoods,
+                $realCharacteristics
+            );
+
+            $fallbackCount = $this->getLifestylePreviewCount($fallbackFilters);
+            if ($fallbackCount > 0) {
+                $candidateFilters = $fallbackFilters;
+                $previewCount = $fallbackCount;
+                $this->lifestyleAnalysis .= "\n\nI broadened the recommendation to adjacent in-list neighborhoods with current stock while respecting your budget constraints.";
+            }
+        }
+
+        if ($previewCount === 0) {
+            $this->lifestyleWarning = 'We found great areas for you, but we currently have no listings there. Try broadening your budget or features.';
+            return;
+        }
+
+        $this->lifestyleDetectedFilters = $candidateFilters;
+
+        $this->selectedNeighborhoods = is_array($candidateFilters['neighborhoods'] ?? null)
+            ? $candidateFilters['neighborhoods']
+            : [];
+        $this->maxPrice = isset($candidateFilters['maxPrice']) && is_numeric($candidateFilters['maxPrice'])
+            ? (string) (int) $candidateFilters['maxPrice']
+            : '';
+        $this->minRooms = isset($candidateFilters['minRooms']) && is_numeric($candidateFilters['minRooms'])
+            ? (string) (int) $candidateFilters['minRooms']
+            : '';
+        $this->minSize = isset($candidateFilters['minSize']) && is_numeric($candidateFilters['minSize'])
+            ? (string) (int) $candidateFilters['minSize']
+            : '';
+        $this->type = is_string($candidateFilters['type'] ?? null) ? trim($candidateFilters['type']) : '';
+        $this->selectedCharacteristics = is_array($candidateFilters['characteristics'] ?? null)
+            ? $candidateFilters['characteristics']
+            : [];
+        $this->search = is_string($candidateFilters['searchKeyword'] ?? null)
+            ? trim($candidateFilters['searchKeyword'])
+            : '';
+
+        Log::info('AI Recommended vs Applied to Livewire', [
+            'ai_recommended' => $this->lifestyleDetectedFilters,
+            'applied_to_livewire' => [
+                'selectedNeighborhoods' => $this->selectedNeighborhoods,
+                'maxPrice' => $this->maxPrice,
+                'minRooms' => $this->minRooms,
+                'minSize' => $this->minSize,
+                'type' => $this->type,
+                'selectedCharacteristics' => $this->selectedCharacteristics,
+                'search' => $this->search,
+            ],
+        ]);
+
+        $this->resetPage();
+        $this->dispatch('close-lifestyle-advisor');
+    }
+
+    private function normalizeLifestyleFilters(array $filters, array $realNeighborhoods, array $realCharacteristics): array
+    {
+        return [
+            'neighborhoods' => collect($filters['neighborhoods'] ?? [])
+                ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+                ->map(fn (string $value) => trim($value))
+                ->filter(fn (string $value) => in_array($value, $realNeighborhoods, true))
+                ->unique()
+                ->values()
+                ->all(),
+            'maxPrice' => is_numeric($filters['maxPrice'] ?? null) ? (int) $filters['maxPrice'] : null,
+            'minRooms' => is_numeric($filters['minRooms'] ?? null) ? (int) $filters['minRooms'] : null,
+            'minSize' => is_numeric($filters['minSize'] ?? null) ? (int) $filters['minSize'] : null,
+            'type' => is_string($filters['type'] ?? null) ? trim($filters['type']) : null,
+            'searchKeyword' => is_string($filters['searchKeyword'] ?? null) ? trim($filters['searchKeyword']) : null,
+            'characteristics' => collect($filters['characteristics'] ?? [])
+                ->filter(fn ($value) => is_string($value) && trim($value) !== '')
+                ->map(fn (string $value) => Str::lower(trim($value)))
+                ->filter(fn (string $value) => in_array($value, $realCharacteristics, true))
+                ->unique()
+                ->values()
+                ->all(),
+        ];
+    }
+
+    private function requestLifestyleFallbackFilters(array $currentFilters, array $realNeighborhoods, array $realCharacteristics): array
+    {
+        try {
+            $realNeighborhoodsList = collect($realNeighborhoods)->implode(', ');
+            $stockByNeighborhood = Listing::query()
+                ->select('neighborhood', DB::raw('count(*) as total'))
+                ->whereNotNull('neighborhood')
+                ->groupBy('neighborhood')
+                ->orderByDesc('total')
+                ->get()
+                ->map(fn ($row) => [
+                    'neighborhood' => $row->neighborhood,
+                    'total' => (int) $row->total,
+                ])
+                ->values()
+                ->all();
+
+            $response = OpenAI::chat()->create([
+                'model' => 'gpt-4o-mini',
+                'response_format' => ['type' => 'json_object'],
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are a Madrid real estate consultant optimizing fallback filters.
+Use fallback only when budget is the main constraint.
+Do not add random neighborhoods.
+Only broaden to adjacent neighborhoods that are in this exact list: ' . $realNeighborhoodsList . '
+You MUST ONLY return neighborhoods from that list with exact spelling.
+If no valid in-list adjacent options exist, return the same neighborhoods unchanged.
+Return ONLY JSON with:
+{
+  "filters": {
+    "neighborhoods": string[]|null,
+    "maxPrice": number|null,
+    "minRooms": number|null,
+    "minSize": number|null,
+    "type": string|null,
+    "characteristics": string[]|null,
+    "searchKeyword": string|null
+  }
+}
+
+REAL_NEIGHBORHOODS_WITH_STOCK: ' . json_encode($stockByNeighborhood, JSON_UNESCAPED_UNICODE),
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => json_encode([
+                            'currentFilters' => $currentFilters,
+                            'targetMinimumResults' => 3,
+                            'fallbackRule' => 'Only broaden adjacent in-list neighborhoods when budget is the constraint.',
+                        ], JSON_UNESCAPED_UNICODE),
+                    ],
+                ],
+            ]);
+
+            $json = json_decode($response->choices[0]->message->content ?? '', true);
+            if (! is_array($json) || ! is_array($json['filters'] ?? null)) {
+                return $currentFilters;
+            }
+
+            return $this->normalizeLifestyleFilters($json['filters'], $realNeighborhoods, $realCharacteristics);
+        } catch (\Throwable) {
+            return $currentFilters;
+        }
+    }
+
+    private function getLifestylePreviewCount(array $filters): int
+    {
+        return Listing::query()
+            ->when(
+                is_array($filters['neighborhoods'] ?? null) && count($filters['neighborhoods']) > 0,
+                fn ($query) => $query->whereIn('neighborhood', $filters['neighborhoods'])
+            )
+            ->when(is_numeric($filters['maxPrice'] ?? null), fn ($query) => $query->where('price', '<=', (int) $filters['maxPrice']))
+            ->when(is_numeric($filters['minRooms'] ?? null), fn ($query) => $query->where('rooms', '>=', (int) $filters['minRooms']))
+            ->when(is_numeric($filters['minSize'] ?? null), fn ($query) => $query->where('size', '>=', (int) $filters['minSize']))
+            ->when(is_string($filters['type'] ?? null) && trim($filters['type']) !== '', fn ($query) => $query->where('type', trim($filters['type'])))
+            ->when(
+                is_string($filters['searchKeyword'] ?? null) && trim($filters['searchKeyword']) !== '',
+                function ($query) use ($filters): void {
+                    $keyword = trim($filters['searchKeyword']);
+                    $query->where(function ($innerQuery) use ($keyword): void {
+                        $innerQuery
+                            ->where('title', 'like', '%' . $keyword . '%')
+                            ->orWhere('description', 'like', '%' . $keyword . '%')
+                            ->orWhere('neighborhood', 'like', '%' . $keyword . '%');
+                    });
+                }
+            )
+            ->when(
+                is_array($filters['characteristics'] ?? null) && count($filters['characteristics']) > 0,
+                function ($query) use ($filters): void {
+                    foreach ($filters['characteristics'] as $characteristic) {
+                        if (is_string($characteristic) && trim($characteristic) !== '') {
+                            $query->whereJsonContains('characteristics', trim($characteristic));
+                        }
+                    }
+                }
+            )
+            ->count();
+    }
+
     private function getSmartSearchPreviewCount(array $filters): int
     {
         return Listing::query()
@@ -411,10 +771,16 @@ Return ONLY a valid JSON object with this exact structure:
     <div class="mb-8">
         <flux:heading size="xl">Surreal Estate</flux:heading>
         <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Discover curated listings in Madrid with smart filters.</p>
-        <div class="mt-4">
+        <div class="mt-4 flex flex-wrap items-center gap-2">
             <flux:modal.trigger name="ai-search-modal">
                 <flux:button variant="primary" icon="sparkles">
                     Smart Search Assistant
+                </flux:button>
+            </flux:modal.trigger>
+
+            <flux:modal.trigger name="lifestyle-advisor">
+                <flux:button variant="outline" icon="chat-bubble-left-right" wire:click="resetLifestyleAdvisor">
+                    Lifestyle Consultant
                 </flux:button>
             </flux:modal.trigger>
         </div>
@@ -502,6 +868,184 @@ Return ONLY a valid JSON object with this exact structure:
                                 Broaden Search
                             </flux:button>
                         @endif
+                    </div>
+                </flux:card>
+            @endif
+        </div>
+    </flux:modal>
+
+    <flux:modal name="lifestyle-advisor" class="md:max-w-2xl" x-on:close-lifestyle-advisor.window="$flux.modal('lifestyle-advisor').close()">
+        @php
+            $lifestyleProgress = min(100, max(0, (int) round(($lifestyleStep / 6) * 100)));
+        @endphp
+
+        <div class="space-y-4 p-1">
+            <flux:heading size="lg">Lifestyle Consultant</flux:heading>
+            <p class="text-sm text-zinc-600 dark:text-zinc-400">
+                Answer a few focused questions and receive a personalized recommendation based on commute, budget, and neighborhood fit.
+            </p>
+
+            <div class="space-y-1">
+                <div class="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+                    <div class="h-full bg-blue-600 transition-all" style="width: {{ $lifestyleProgress }}%;"></div>
+                </div>
+                <flux:text class="text-xs text-zinc-500 dark:text-zinc-400">
+                    Step {{ $lifestyleStep }} of 6
+                </flux:text>
+            </div>
+
+            @if (!$lifestyleReady)
+                @if ($lifestyleStep === 1)
+                    <div class="space-y-3">
+                        <flux:heading size="sm">Work</flux:heading>
+                        <flux:input
+                            wire:model="lifestyleWorkLocation"
+                            label="Where do you work/study?"
+                            placeholder="Office, campus, or key landmark"
+                        />
+                        <flux:select wire:model="lifestyleWorkFrequency" label="How often do you go there?">
+                            <option value="">Select frequency</option>
+                            <option value="daily">Daily</option>
+                            <option value="3-4 days/week">3-4 days/week</option>
+                            <option value="1-2 days/week">1-2 days/week</option>
+                            <option value="occasionally">Occasionally</option>
+                            <option value="remote">Fully remote</option>
+                        </flux:select>
+                    </div>
+                @elseif ($lifestyleStep === 2)
+                    <div class="space-y-3">
+                        <flux:heading size="sm">Family</flux:heading>
+                        <flux:text class="text-sm text-zinc-600 dark:text-zinc-400">Who are you moving with?</flux:text>
+                        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                            @foreach (['Alone', 'Partner', 'Family'] as $household)
+                                <label class="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800">
+                                    <input type="radio" wire:model="lifestyleHousehold" value="{{ $household }}" class="h-4 w-4" />
+                                    <span>{{ $household }}</span>
+                                </label>
+                            @endforeach
+                        </div>
+                        <flux:checkbox wire:model.live="lifestyleHasPets" label="Do you have pets?" />
+                    </div>
+                @elseif ($lifestyleStep === 3)
+                    <div class="space-y-3">
+                        <flux:heading size="sm">Financials</flux:heading>
+                        <flux:input
+                            wire:model="lifestyleIncome"
+                            type="number"
+                            min="0"
+                            label="Monthly net income (€)"
+                            placeholder="4500"
+                        />
+                        <flux:input
+                            wire:model="lifestyleSavings"
+                            type="number"
+                            min="0"
+                            label="Total savings for deposit (€)"
+                            placeholder="90000"
+                        />
+                    </div>
+                @elseif ($lifestyleStep === 4)
+                    <div class="space-y-3">
+                        <flux:heading size="sm">Hobbies</flux:heading>
+                        <flux:input
+                            wire:model="lifestyleHobbies"
+                            label="What are your hobbies and where do you practice them?"
+                            placeholder="Padel in Chamartin, gym in Chamberi, etc."
+                        />
+                    </div>
+                @elseif ($lifestyleStep === 5)
+                    <div class="space-y-3">
+                        <flux:heading size="sm">Social</flux:heading>
+                        <flux:input
+                            wire:model="lifestyleSocial"
+                            label="Do you want to live near family/friends? Where are they?"
+                            placeholder="Family in Retiro, friends near Sol..."
+                        />
+                    </div>
+                @else
+                    <div class="space-y-3">
+                        <flux:heading size="sm">Priority & Final Notes</flux:heading>
+                        <flux:select wire:model="lifestylePriority" label="What is your non-negotiable?">
+                            <option value="">Select one</option>
+                            <option value="Price">Price</option>
+                            <option value="Location">Location</option>
+                            <option value="Property Quality">Property Quality</option>
+                        </flux:select>
+                        <flux:textarea
+                            wire:model="lifestyleNotes"
+                            rows="4"
+                            label="Anything else the AI should know?"
+                            placeholder="Any extra constraints or preferences..."
+                        />
+                    </div>
+                @endif
+
+                <div class="flex items-center justify-between pt-2">
+                    <flux:button variant="ghost" wire:click="previousLifestyleStep" :disabled="$lifestyleStep <= 1">
+                        Back
+                    </flux:button>
+
+                    @if ($lifestyleStep < 6)
+                        <flux:button variant="primary" wire:click="nextLifestyleStep">
+                            Continue
+                        </flux:button>
+                    @else
+                        <flux:button variant="primary" wire:click="recommendLifestyle" :disabled="$isLifestyleAnalyzing">
+                            Generate Recommendation
+                        </flux:button>
+                    @endif
+                </div>
+
+                <div wire:loading.flex wire:target="recommendLifestyle" class="flex-col items-start gap-2 rounded-md bg-zinc-100 px-3 py-2 text-sm text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                    <div class="flex items-center gap-2">
+                        <flux:icon name="sparkles" class="size-4 animate-pulse" />
+                        <span class="font-medium">Thinking...</span>
+                    </div>
+                    <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+                        <li>Calculating commute times...</li>
+                        <li>Checking financial viability (30% entry rule)...</li>
+                        <li>Matching neighborhoods with live inventory...</li>
+                    </ul>
+                </div>
+            @else
+                <flux:card variant="subtle" class="space-y-3 p-3">
+                    <flux:heading size="sm">Recommendation Analysis</flux:heading>
+                    <p class="whitespace-pre-line text-sm text-zinc-700 dark:text-zinc-300">
+                        {{ $lifestyleAnalysis }}
+                    </p>
+
+                    <flux:heading size="xs">Technical Filters</flux:heading>
+                    <div class="flex flex-wrap gap-2">
+                        @foreach (($lifestyleDetectedFilters['neighborhoods'] ?? []) as $neighborhood)
+                            <flux:badge size="sm" color="zinc">Neighborhood: {{ $neighborhood }}</flux:badge>
+                        @endforeach
+                        @if (!empty($lifestyleDetectedFilters['maxPrice']))
+                            <flux:badge size="sm" color="zinc">Max €{{ number_format((int) $lifestyleDetectedFilters['maxPrice'], 0, ',', '.') }}</flux:badge>
+                        @endif
+                        @if (!empty($lifestyleDetectedFilters['minRooms']))
+                            <flux:badge size="sm" color="zinc">Rooms: {{ (int) $lifestyleDetectedFilters['minRooms'] }}+</flux:badge>
+                        @endif
+                        @if (!empty($lifestyleDetectedFilters['minSize']))
+                            <flux:badge size="sm" color="zinc">Min {{ (int) $lifestyleDetectedFilters['minSize'] }} m²</flux:badge>
+                        @endif
+                        @if (!empty($lifestyleDetectedFilters['type']))
+                            <flux:badge size="sm" color="zinc">Type: {{ $lifestyleDetectedFilters['type'] }}</flux:badge>
+                        @endif
+                    </div>
+
+                    @if ($lifestyleWarning !== '')
+                        <flux:badge color="amber" size="sm">
+                            {{ $lifestyleWarning }}
+                        </flux:badge>
+                    @endif
+
+                    <div class="flex justify-end">
+                        <flux:button
+                            variant="primary"
+                            wire:click="applyLifestyleRecommendation"
+                        >
+                            Show matching properties
+                        </flux:button>
                     </div>
                 </flux:card>
             @endif
