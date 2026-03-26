@@ -5,6 +5,7 @@ namespace Database\Seeders;
 use App\Models\User;
 use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\File;
 
 class DatabaseSeeder extends Seeder
 {
@@ -15,7 +16,13 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
-        // User::factory(10)->create();
+        $jsonPath = base_path('database/seeders/data/listings.json');
+
+        if (File::exists($jsonPath)) {
+            $this->call(ListingsFromJsonSeeder::class);
+
+            return;
+        }
 
         User::factory()->create([
             'name' => 'Test User',
