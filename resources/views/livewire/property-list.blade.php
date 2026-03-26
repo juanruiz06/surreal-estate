@@ -9,9 +9,9 @@ use Livewire\Volt\Component;
 use Livewire\WithPagination;
 
 new class extends Component
-{
+{ // filters
     use WithPagination;
-
+    
     #[Url(as: 'q', except: '')]
     public string $search = '';
 
@@ -45,7 +45,9 @@ new class extends Component
     #[Url(except: 'desc')]
     public string $sortDirection = 'desc';
 
-    public array $selectedNeighborhoods = [];
+
+    // Smart search and lifestyle filters
+    public array $selectedNeighborhoods = []; 
     public array $selectedCharacteristics = [];
     public string $aiSearchPrompt = '';
     public string $aiExplanation = '';
@@ -136,7 +138,7 @@ new class extends Component
         $this->resetPage();
     }
 
-    public function applySmartSearch(): void
+    public function applySmartSearch(): void // Applies the smart search by calling the AI service and applying the filters to the query
     {
         $searchTerms = str_word_count(trim($this->aiSearchPrompt));
 
@@ -150,11 +152,11 @@ new class extends Component
         $this->aiPreviewCount = 0;
 
         try {
-            $smartSearchResult = $this->openAIService()->analyzeSmartSearch($this->aiSearchPrompt, $this->allCharacteristics);
+            $recommendation = $this->openAIService()->analyzeSmartSearch($this->aiSearchPrompt, $this->allCharacteristics);
 
-            $this->aiDetectedFilters = is_array($smartSearchResult['filters'] ?? null) ? $smartSearchResult['filters'] : [];
-            $this->aiExplanation = is_string($smartSearchResult['logic_summary'] ?? null)
-                ? trim($smartSearchResult['logic_summary'])
+            $this->aiDetectedFilters = is_array($recommendation['filters'] ?? null) ? $recommendation['filters'] : [];
+            $this->aiExplanation = is_string($recommendation['logic_summary'] ?? null)
+                ? trim($recommendation['logic_summary'])
                 : 'I analyzed your request and prepared suggested filters.';
 
             $this->aiPreviewCount = $this->listingQueryService()->getSmartSearchPreviewCount($this->aiDetectedFilters);
@@ -165,7 +167,8 @@ new class extends Component
 
             $this->aiPreviewReady = true;
         } catch (\Throwable $e) {
-            $this->aiExplanation = 'I could not analyze your request right now. Please try again.';
+            Log::warning('Smart Search consultant failed', ['exception' => $e]);
+            $this->aiExplanation = 'The Consultant is busy right now. Please try again in a moment.';
             $this->aiDetectedFilters = [];
             $this->aiPreviewCount = 0;
             $this->aiPreviewReady = true;
@@ -174,7 +177,7 @@ new class extends Component
         }
     }
 
-    public function confirmAndApplySmartSearch(): void
+    public function confirmAndApplySmartSearch(): void // Confirms the smart search by applying the filters to the query
     {
         if (count($this->aiDetectedFilters) === 0) {
             return;
@@ -245,7 +248,7 @@ new class extends Component
         $this->lifestyleWarning = '';
 
         try {
-            $lifestyleResult = $this->openAIService()->recommendLifestyle([
+            $recommendation = $this->openAIService()->recommendLifestyle([
                 'workLocation' => $this->lifestyleWorkLocation,
                 'workFrequency' => $this->lifestyleWorkFrequency,
                 'household' => $this->lifestyleHousehold,
@@ -258,13 +261,14 @@ new class extends Component
                 'notes' => $this->lifestyleNotes,
             ], $this->allCharacteristics);
 
-            $this->lifestyleDetectedFilters = is_array($lifestyleResult['filters'] ?? null) ? $lifestyleResult['filters'] : [];
-            $this->lifestyleAnalysis = is_string($lifestyleResult['analysis'] ?? null)
-                ? trim($lifestyleResult['analysis'])
+            $this->lifestyleDetectedFilters = is_array($recommendation['filters'] ?? null) ? $recommendation['filters'] : [];
+            $this->lifestyleAnalysis = is_string($recommendation['analysis'] ?? null)
+                ? trim($recommendation['analysis'])
                 : 'I prepared a lifestyle-based recommendation for your situation.';
             $this->lifestyleReady = true;
-        } catch (\Throwable) {
-            $this->lifestyleAnalysis = 'I could not generate a recommendation right now. Please try again.';
+        } catch (\Throwable $e) {
+            Log::warning('Lifestyle consultant failed', ['exception' => $e]);
+            $this->lifestyleAnalysis = 'The Lifestyle Consultant is thinking. Please try again in a moment.';
             $this->lifestyleDetectedFilters = [];
             $this->lifestyleReady = true;
         } finally {
@@ -284,18 +288,26 @@ new class extends Component
         $hasBudgetConstraint = is_numeric($candidateFilters['maxPrice'] ?? null);
 
         if ($previewCount === 0 && $hasBudgetConstraint) {
-            $fallbackFilters = $this->openAIService()->requestLifestyleFallbackFilters($candidateFilters, $this->allCharacteristics);
+            try {
+                $fallbackFilters = $this->openAIService()->requestLifestyleFallbackFilters($candidateFilters, $this->allCharacteristics);
 
-            $fallbackCount = $this->listingQueryService()->getLifestylePreviewCount($fallbackFilters);
-            if ($fallbackCount > 0) {
-                $candidateFilters = $fallbackFilters;
-                $previewCount = $fallbackCount;
-                $this->lifestyleAnalysis .= "\n\nI broadened the recommendation to adjacent in-list neighborhoods with current stock while respecting your budget constraints.";
+                $fallbackCount = $this->listingQueryService()->getLifestylePreviewCount($fallbackFilters);
+                if ($fallbackCount > 0) {
+                    $candidateFilters = $fallbackFilters;
+                    $previewCount = $fallbackCount;
+                    $this->lifestyleAnalysis .= "\n\nI broadened the recommendation to adjacent in-list neighborhoods with current stock while respecting your budget constraints.";
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Lifestyle fallback filters failed', ['exception' => $e]);
+                $this->lifestyleWarning = 'We could not widen the search automatically. You can try again in a moment or adjust your budget.';
             }
         }
 
         if ($previewCount === 0) {
-            $this->lifestyleWarning = 'We found great areas for you, but we currently have no listings there. Try broadening your budget or features.';
+            if ($this->lifestyleWarning === '') {
+                $this->lifestyleWarning = 'We found great areas for you, but we currently have no listings there. Try broadening your budget or features.';
+            }
+
             return;
         }
 
@@ -340,7 +352,7 @@ new class extends Component
 
 };
 ?>
-
+<!-- Main section of the frontend where the user can see the listings and the filters -->   
 <section class="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
     <div class="mb-8">
         <flux:heading size="xl">Surreal Estate</flux:heading>

@@ -69,7 +69,7 @@ class OpenAIService
         $cheapThreshold = $percentile($prices, 0.20);
         $luxuryThreshold = $percentile($prices, 0.90);
 
-        $aiResponse = OpenAI::chat()->create([
+        $chatResponse = OpenAI::chat()->create([
             'model' => 'gpt-4o-mini',
             'response_format' => ['type' => 'json_object'],
             'messages' => [
@@ -127,28 +127,28 @@ Return ONLY a valid JSON object with this exact structure:
             ],
         ]);
 
-        $json = json_decode($aiResponse->choices[0]->message->content ?? '', true);
-        $filters = is_array($json['filters'] ?? null) ? $json['filters'] : [];
+        $decoded = json_decode($chatResponse->choices[0]->message->content ?? '', true);
+        $rawFilters = is_array($decoded['filters'] ?? null) ? $decoded['filters'] : [];
 
         return [
             'filters' => [
-                'minPrice' => is_numeric($filters['minPrice'] ?? null) ? (int) $filters['minPrice'] : null,
-                'maxPrice' => is_numeric($filters['maxPrice'] ?? null) ? (int) $filters['maxPrice'] : null,
-                'neighborhoods' => collect(is_array($filters['neighborhoods'] ?? null)
-                    ? $filters['neighborhoods']
-                    : (is_string($filters['neighborhoods'] ?? null) ? [$filters['neighborhoods']] : []))
+                'minPrice' => is_numeric($rawFilters['minPrice'] ?? null) ? (int) $rawFilters['minPrice'] : null,
+                'maxPrice' => is_numeric($rawFilters['maxPrice'] ?? null) ? (int) $rawFilters['maxPrice'] : null,
+                'neighborhoods' => collect(is_array($rawFilters['neighborhoods'] ?? null)
+                    ? $rawFilters['neighborhoods']
+                    : (is_string($rawFilters['neighborhoods'] ?? null) ? [$rawFilters['neighborhoods']] : []))
                     ->filter(fn ($value) => is_string($value) && trim($value) !== '')
                     ->map(fn (string $value) => trim($value))
                     ->filter(fn (string $value) => in_array($value, $neighborhoods, true))
                     ->unique()
                     ->values()
                     ->all(),
-                'type' => is_string($filters['type'] ?? null) ? trim($filters['type']) : null,
-                'minRooms' => is_numeric($filters['minRooms'] ?? null) ? (int) $filters['minRooms'] : null,
-                'maxSize' => is_numeric($filters['maxSize'] ?? null) ? (int) $filters['maxSize'] : null,
-                'minSize' => is_numeric($filters['minSize'] ?? null) ? (int) $filters['minSize'] : null,
-                'searchKeyword' => is_string($filters['searchKeyword'] ?? null) ? trim($filters['searchKeyword']) : null,
-                'characteristics' => collect($filters['characteristics'] ?? [])
+                'type' => is_string($rawFilters['type'] ?? null) ? trim($rawFilters['type']) : null,
+                'minRooms' => is_numeric($rawFilters['minRooms'] ?? null) ? (int) $rawFilters['minRooms'] : null,
+                'maxSize' => is_numeric($rawFilters['maxSize'] ?? null) ? (int) $rawFilters['maxSize'] : null,
+                'minSize' => is_numeric($rawFilters['minSize'] ?? null) ? (int) $rawFilters['minSize'] : null,
+                'searchKeyword' => is_string($rawFilters['searchKeyword'] ?? null) ? trim($rawFilters['searchKeyword']) : null,
+                'characteristics' => collect($rawFilters['characteristics'] ?? [])
                     ->filter(fn ($value) => is_string($value) && trim($value) !== '')
                     ->map(fn (string $value) => Str::lower(trim($value)))
                     ->filter(fn (string $value) => in_array($value, $characteristics, true))
@@ -156,8 +156,8 @@ Return ONLY a valid JSON object with this exact structure:
                     ->values()
                     ->all(),
             ],
-            'logic_summary' => is_string($json['logic_summary'] ?? null)
-                ? trim($json['logic_summary'])
+            'logic_summary' => is_string($decoded['logic_summary'] ?? null)
+                ? trim($decoded['logic_summary'])
                 : 'I analyzed your request and prepared suggested filters.',
         ];
     }
@@ -168,7 +168,7 @@ Return ONLY a valid JSON object with this exact structure:
         $realNeighborhoodsList = collect($realNeighborhoods)->implode(', ');
         $realCharacteristics = $this->normalizeCharacteristicList($allCharacteristics);
 
-        $payload = json_encode([
+        $userPayload = json_encode([
             'work' => [
                 'location' => $input['workLocation'] ?? '',
                 'frequency' => $input['workFrequency'] ?? '',
@@ -187,7 +187,8 @@ Return ONLY a valid JSON object with this exact structure:
             'notes' => $input['notes'] ?? '',
         ], JSON_UNESCAPED_UNICODE);
 
-        $response = OpenAI::chat()->create([
+        // Prompt asks the model to respect Spanish entry costs (~20% down + ~10% taxes/fees) and a ~33% debt-to-income ceiling.
+        $chatResponse = OpenAI::chat()->create([
             'model' => 'gpt-4o-mini',
             'response_format' => ['type' => 'json_object'],
             'messages' => [
@@ -220,18 +221,18 @@ Return ONLY valid JSON:
                 ],
                 [
                     'role' => 'user',
-                    'content' => $payload,
+                    'content' => $userPayload,
                 ],
             ],
         ]);
 
-        $json = json_decode($response->choices[0]->message->content ?? '', true);
-        $filters = is_array($json['filters'] ?? null) ? $json['filters'] : [];
+        $decoded = json_decode($chatResponse->choices[0]->message->content ?? '', true);
+        $rawFilters = is_array($decoded['filters'] ?? null) ? $decoded['filters'] : [];
 
         return [
-            'filters' => $this->normalizeLifestyleFilters($filters, $realNeighborhoods, $realCharacteristics),
-            'analysis' => is_string($json['analysis'] ?? null)
-                ? trim($json['analysis'])
+            'filters' => $this->normalizeLifestyleFilters($rawFilters, $realNeighborhoods, $realCharacteristics),
+            'analysis' => is_string($decoded['analysis'] ?? null)
+                ? trim($decoded['analysis'])
                 : 'I prepared a lifestyle-based recommendation for your situation.',
         ];
     }
@@ -255,7 +256,7 @@ Return ONLY valid JSON:
             ->values()
             ->all();
 
-        $response = OpenAI::chat()->create([
+        $chatResponse = OpenAI::chat()->create([
             'model' => 'gpt-4o-mini',
             'response_format' => ['type' => 'json_object'],
             'messages' => [
@@ -293,12 +294,12 @@ REAL_NEIGHBORHOODS_WITH_STOCK: '.json_encode($stockByNeighborhood, JSON_UNESCAPE
             ],
         ]);
 
-        $json = json_decode($response->choices[0]->message->content ?? '', true);
-        if (! is_array($json) || ! is_array($json['filters'] ?? null)) {
+        $decoded = json_decode($chatResponse->choices[0]->message->content ?? '', true);
+        if (! is_array($decoded) || ! is_array($decoded['filters'] ?? null)) {
             return $this->normalizeLifestyleFilters($currentFilters, $realNeighborhoods, $realCharacteristics);
         }
 
-        return $this->normalizeLifestyleFilters($json['filters'], $realNeighborhoods, $realCharacteristics);
+        return $this->normalizeLifestyleFilters($decoded['filters'], $realNeighborhoods, $realCharacteristics);
     }
 
     private function getRealNeighborhoods(): array

@@ -24,7 +24,8 @@ class ListingQueryService
     public function getProperties(array $filters, int $perPage = 12): LengthAwarePaginator
     {
         $allowedSortFields = ['id', 'price', 'size', 'surreal_score'];
-        $sortBy = in_array($filters['sortBy'] ?? 'price', $allowedSortFields, true) ? $filters['sortBy'] : 'price';
+        $requestedSort = $filters['sortBy'] ?? 'price';
+        $sortBy = in_array($requestedSort, $allowedSortFields, true) ? $requestedSort : 'price';
         $sortDirection = ($filters['sortDirection'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
 
         return Listing::query()
