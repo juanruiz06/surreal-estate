@@ -8,7 +8,7 @@
 
 ## ✨ Key AI Features
 
-* **The Lifestyle Consultant:** An interactive AI advisor that asks about your life (commute, savings, hobbies) and recommends properties. It enforces real-world financial guardrails (e.g., the 30% entry rule in Spain) and is able to interpret free form text as well.
+* **The Lifestyle Consultant:** An interactive AI advisor that asks about your life (commute, savings, hobbies) and recommends properties. It enforces real-world financial guardrails (e.g., the 30% entry rule in Spain) and is able to interpret free form text as well. It's made for when the user if unsure of what they want and wants to explore
 * **The Surreal Score:** An automated AI valuation engine that scores properties from 1.0 to 10.0 based on price-per-m2 against neighborhood averages, ammenities, it-factor... It provides brutally honest insights, to get the point across and gather the user's attention.
 * **Smart Search:** A natural language processing search bar. Just type *"I want a bright penthouse near Retiro for under 1M"* and let the AI do the filtering.
 
@@ -86,7 +86,7 @@ Run the migrations and the custom JSON seeder:
 ./vendor/bin/sail npm run dev
 ```
 
-The application is now accessible at 👉 http://localhost
+The application is now accessible at http://localhost
 
 ## 🤖 Note on AI Features & OpenAI API Key
 
