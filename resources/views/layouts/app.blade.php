@@ -16,3 +16,4 @@
     @fluxScripts
 </body>
 </html>
+// Main layout of the app 
