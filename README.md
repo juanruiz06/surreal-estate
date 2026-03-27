@@ -2,6 +2,8 @@
 
 **Surreal Estate** is a high-performance Real Estate MVP built for the Madrid market. Moving away from the traditional "static filter" paradigm, it offers a personalized, consultant-like experience using AI to match users with properties that fit their actual lifestyle, preferences and financial reality.
 
+📹 **[Project overview (Loom)](https://www.loom.com/share/84b2792d2cdb4cebbaab15f93e4452c7)** — short walkthrough of the app in action.
+
 ---
 
 ## ✨ Key AI Features
